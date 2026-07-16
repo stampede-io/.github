@@ -33,6 +33,13 @@ jobs:
       - name: Build + test (unit + Testcontainers ITs)
         run: mvn -B verify
 
+      - name: Upload OpenAPI spec
+        if: hashFiles('target/openapi.json') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: openapi-${{ inputs.service-name }}
+          path: target/openapi.json
+
       - name: Build Docker image
         run: docker build -t ghcr.io/stampede-io/${{ inputs.service-name }}:${{ github.sha }} .
 
