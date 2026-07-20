@@ -31,14 +31,15 @@ jobs:
           cache: maven
 
       - name: Build + test (unit + Testcontainers ITs)
+        working-directory: ${{ inputs.service-name }}
         run: mvn -B verify
 
       - name: Upload OpenAPI spec
-        if: hashFiles('target/openapi.json') != ''
+        if: hashFiles(format('{0}/target/openapi.json', inputs.service-name)) != ''
         uses: actions/upload-artifact@v4
         with:
           name: openapi-${{ inputs.service-name }}
-          path: target/openapi.json
+          path: ${{ inputs.service-name }}/target/openapi.json
 
       - name: Build Docker image
         run: docker build -t ghcr.io/stampede-io/${{ inputs.service-name }}:${{ github.sha }} .
