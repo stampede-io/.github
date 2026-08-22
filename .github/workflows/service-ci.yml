@@ -13,6 +13,9 @@ jobs:
     permissions:
       packages: write
       contents: read
+    env:
+      REGISTRY: ghcr.io
+      IMAGE_NAME: stampede-io/${{ inputs.service-name }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -41,18 +44,79 @@ jobs:
           name: openapi-${{ inputs.service-name }}
           path: ${{ inputs.service-name }}/target/openapi.json
 
-      - name: Build Docker image
-        run: docker build -t ghcr.io/stampede-io/${{ inputs.service-name }}:${{ github.sha }} .
+      # Derives image tags and OCI labels from the git ref.
+      #   push to main  -> :<full-sha>, :latest
+      #   push tag vX.Y.Z -> :<full-sha>, :vX.Y.Z, :X.Y.Z, :X.Y
+      # org.opencontainers.image.source is what links the GHCR package back to
+      # its repository, so the package page shows source, README and licence.
+      - name: Derive image tags and labels
+        id: meta
+        uses: docker/metadata-action@v6.2.0
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=raw,value=${{ github.sha }}
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=semver,pattern=v{{version}}
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+          labels: |
+            org.opencontainers.image.title=stampede-${{ inputs.service-name }}
+            org.opencontainers.image.description=STAMPEDE ${{ inputs.service-name }} service
+            org.opencontainers.image.vendor=stampede-io
+
+      - name: Set up Buildx
+        uses: docker/setup-buildx-action@v4.3.0
+
+      # Built and loaded locally first so Trivy gates the image BEFORE anything
+      # is published. A HIGH/CRITICAL finding must fail the run with nothing
+      # pushed to the registry.
+      - name: Build image
+        uses: docker/build-push-action@v7.3.0
+        with:
+          context: .
+          load: true
+          push: false
+          tags: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
       - name: Trivy image scan
-        uses: aquasecurity/trivy-action@master
+        uses: aquasecurity/trivy-action@0.36.0
         with:
-          image-ref: ghcr.io/stampede-io/${{ inputs.service-name }}:${{ github.sha }}
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
           severity: HIGH,CRITICAL
           exit-code: '1'
 
+      - name: Log in to GHCR
+        if: github.event_name == 'push'
+        uses: docker/login-action@v4.6.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Re-runs the build to push every derived tag. The layers are already in
+      # the gha cache from the step above, so this resolves to a cache hit and
+      # publishes the same bits Trivy just cleared.
       - name: Push image to GHCR
-        if: github.ref == 'refs/heads/main'
+        if: github.event_name == 'push'
+        uses: docker/build-push-action@v7.3.0
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+
+      - name: Summarise published tags
+        if: github.event_name == 'push'
         run: |
-          echo ${{ secrets.GITHUB_TOKEN }} | docker login ghcr.io -u ${{ github.actor }} --password-stdin
-          docker push ghcr.io/stampede-io/${{ inputs.service-name }}:${{ github.sha }}
+          {
+            echo "### Published \`${{ inputs.service-name }}\`"
+            echo ""
+            echo '```'
+            echo "${{ steps.meta.outputs.tags }}"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
