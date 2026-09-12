@@ -32,9 +32,7 @@ When 10,000 fans rush to buy tickets the moment they drop, traditional architect
 ```
                           Browser — React 19 SPA
                           PKCE auth, tokens in memory
-                                     ╵
-                                     ╵  ⚠ not yet wired — open bug
-                                     ╵
+                                     │
                                      ▼
                   ┌───────────────────────────────────┐
                   │           API Gateway             │
@@ -84,7 +82,7 @@ When 10,000 fans rush to buy tickets the moment they drop, traditional architect
 
 The gateway → service edges are HTTP routing. Between the business services themselves, every edge is Kafka — with one exception: **booking → catalog** is a synchronous OpenFeign call for seat validation, wrapped in a Resilience4j circuit breaker so a catalog outage degrades booking instead of taking it down.
 
-> The browser → gateway hop is drawn dashed because it is **not currently working** — the SPA dev proxy points at the wrong port and its auth paths match no gateway route. Everything below the gateway is verified and running. Tracked as an open bug.
+> The browser → gateway hop is proven end to end (STAM-440): a Playwright spec with no mocks drives the real SPA through the real gateway — PKCE login, seat map, a hold — and the gateway's BFF token handler keeps the refresh token out of the browser entirely (see the platform ADR-0005).
 
 ## Core Guarantees
 
