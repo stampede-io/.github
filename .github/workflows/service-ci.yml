@@ -56,3 +56,87 @@ jobs:
         run: |
           echo ${{ secrets.GITHUB_TOKEN }} | docker login ghcr.io -u ${{ github.actor }} --password-stdin
           docker push ghcr.io/stampede-io/${{ inputs.service-name }}:${{ github.sha }}
+
+      - name: Check helm/Chart.yaml version matches pom.xml (STAM-51 AC8)
+        working-directory: ${{ inputs.service-name }}
+        run: |
+          APP_VERSION=$(mvn -q -Dexpression=project.version -DforceStdout help:evaluate)
+          CHART_VERSION=$(grep '^version:' ../helm/Chart.yaml | awk '{print $2}')
+          CHART_APP_VERSION=$(grep '^appVersion:' ../helm/Chart.yaml | awk '{print $2}' | tr -d '"')
+          echo "pom.xml project.version=$APP_VERSION | Chart.yaml version=$CHART_VERSION appVersion=$CHART_APP_VERSION"
+          if [ "$APP_VERSION" != "$CHART_VERSION" ] || [ "$APP_VERSION" != "$CHART_APP_VERSION" ]; then
+            echo "::error::helm/Chart.yaml's version/appVersion must match pom.xml's project.version, bumped in the same commit. pom=$APP_VERSION chart.version=$CHART_VERSION chart.appVersion=$CHART_APP_VERSION"
+            exit 1
+          fi
+
+      - name: Set up Helm
+        if: github.ref == 'refs/heads/main'
+        uses: azure/setup-helm@v4
+
+      - name: Package and push Helm chart to GHCR (STAM-51 AC1)
+        if: github.ref == 'refs/heads/main'
+        run: |
+          helm package ${{ inputs.service-name }}/helm --destination /tmp/chart-out
+          echo ${{ secrets.GITHUB_TOKEN }} | helm registry login ghcr.io -u ${{ github.actor }} --password-stdin
+          helm push /tmp/chart-out/${{ inputs.service-name }}-*.tgz oci://ghcr.io/stampede-io/charts
+
+      - name: Get pushed image digest
+        if: github.ref == 'refs/heads/main'
+        id: digest
+        run: |
+          echo "digest=$(docker inspect --format='{{index .RepoDigests 0}}' ghcr.io/stampede-io/${{ inputs.service-name }}:${{ github.sha }})" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout STAM-platform (STAM-62 / AC1)
+        if: github.ref == 'refs/heads/main'
+        uses: actions/checkout@v4
+        with:
+          repository: stampede-io/STAM-platform
+          token: ${{ secrets.GITOPS_PAT }}
+          path: stam-platform
+          fetch-depth: 0
+
+      - name: Install yq
+        if: github.ref == 'refs/heads/main'
+        uses: mikefarah/yq@v4.44.3
+
+      - name: Bump image tag in values-staging.yaml (STAM-62 / AC1)
+        if: github.ref == 'refs/heads/main'
+        id: bump
+        working-directory: stam-platform
+        run: |
+          VALUES=platform/charts/stampede/values-staging.yaml
+          OLD_SHA=$(yq ".${{ inputs.service-name }}.image.tag // \"\"" "$VALUES")
+          echo "old_sha=$OLD_SHA" >> "$GITHUB_OUTPUT"
+          yq -i ".${{ inputs.service-name }}.image.tag = \"${{ github.sha }}\"" "$VALUES"
+
+      - name: Open tag-bump PR against STAM-platform (STAM-62 / AC1-AC2)
+        # Targets STAM-platform's own values-staging.yaml, not a
+        # per-service file in STAM-gitops as the ticket pictures:
+        # that's what the ArgoCD Application this bump is meant to
+        # trigger actually reads (STAM-61's app-of-apps points at
+        # platform/charts/stampede with -f values-staging.yaml, not
+        # at anything in STAM-gitops) — bumping gitops itself would
+        # change nothing ArgoCD looks at. Same per-environment-not-
+        # per-service adaptation STAM-61 already made, applied
+        # consistently here.
+        if: github.ref == 'refs/heads/main'
+        uses: peter-evans/create-pull-request@v7
+        with:
+          token: ${{ secrets.GITOPS_PAT }}
+          path: stam-platform
+          branch: bump/${{ inputs.service-name }}-${{ github.sha }}
+          commit-message: "chore(${{ inputs.service-name }}): bump staging image to ${{ github.sha }}"
+          title: "chore(${{ inputs.service-name }}): bump staging image to ${{ github.sha }}"
+          body: |
+            Automated tag bump from `${{ inputs.service-name }}`'s own CI
+            (STAM-62) — merging this is the one step staging needs; ArgoCD
+            (STAM-61, `syncPolicy.automated`) picks it up within ~3 minutes.
+
+            - **Source repo:** stampede-io/${{ inputs.service-name }}@${{ github.sha }}
+            - **Source commit:** https://github.com/stampede-io/${{ inputs.service-name }}/commit/${{ github.sha }}
+            - **Image digest:** `${{ steps.digest.outputs.digest }}`
+            - **Previous staging tag:** `${{ steps.bump.outputs.old_sha }}`
+            - **Changes since the previous bump:** https://github.com/stampede-io/${{ inputs.service-name }}/compare/${{ steps.bump.outputs.old_sha }}...${{ github.sha }}
+
+            This PR touches only `${{ inputs.service-name }}`'s own
+            `image.tag` key — the other five services are untouched.
