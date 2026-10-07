@@ -56,3 +56,26 @@ jobs:
         run: |
           echo ${{ secrets.GITHUB_TOKEN }} | docker login ghcr.io -u ${{ github.actor }} --password-stdin
           docker push ghcr.io/stampede-io/${{ inputs.service-name }}:${{ github.sha }}
+
+      - name: Check helm/Chart.yaml version matches pom.xml (STAM-51 AC8)
+        working-directory: ${{ inputs.service-name }}
+        run: |
+          APP_VERSION=$(mvn -q -Dexpression=project.version -DforceStdout help:evaluate)
+          CHART_VERSION=$(grep '^version:' ../helm/Chart.yaml | awk '{print $2}')
+          CHART_APP_VERSION=$(grep '^appVersion:' ../helm/Chart.yaml | awk '{print $2}' | tr -d '"')
+          echo "pom.xml project.version=$APP_VERSION | Chart.yaml version=$CHART_VERSION appVersion=$CHART_APP_VERSION"
+          if [ "$APP_VERSION" != "$CHART_VERSION" ] || [ "$APP_VERSION" != "$CHART_APP_VERSION" ]; then
+            echo "::error::helm/Chart.yaml's version/appVersion must match pom.xml's project.version, bumped in the same commit. pom=$APP_VERSION chart.version=$CHART_VERSION chart.appVersion=$CHART_APP_VERSION"
+            exit 1
+          fi
+
+      - name: Set up Helm
+        if: github.ref == 'refs/heads/main'
+        uses: azure/setup-helm@v4
+
+      - name: Package and push Helm chart to GHCR (STAM-51 AC1)
+        if: github.ref == 'refs/heads/main'
+        run: |
+          helm package ${{ inputs.service-name }}/helm --destination /tmp/chart-out
+          echo ${{ secrets.GITHUB_TOKEN }} | helm registry login ghcr.io -u ${{ github.actor }} --password-stdin
+          helm push /tmp/chart-out/${{ inputs.service-name }}-*.tgz oci://ghcr.io/stampede-io/charts
