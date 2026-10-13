@@ -1,0 +1,117 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+# CodeRabbit configuration for the stampede-io/.github repo
+#
+# NOTE: CodeRabbit does NOT read an org-wide config from this repository.
+# .coderabbit.yaml is per-repo only; org-level defaults are set in the
+# CodeRabbit dashboard UI. This file governs THIS repo's own PRs.
+#
+# A change here lands in all seven service pipelines at once, so the blast
+# radius of a bad merge is the whole org. Review accordingly.
+language: en-US
+early_access: false
+
+reviews:
+  profile: assertive
+  request_changes_workflow: false
+  high_level_summary: true
+  poem: false
+  review_status: true
+  collapse_walkthrough: true
+  auto_review:
+    enabled: true
+    drafts: false
+    base_branches:
+      - "Dev"
+      - "main"
+
+  path_filters:
+    - "!modernize/**"
+
+  path_instructions:
+    - path: ".github/workflows/service-ci.yml"
+      instructions: >
+        This reusable workflow is called by all seven service repos. A break
+        here breaks every pipeline simultaneously - this has already happened
+        once, via a wrong trivy-action ref. Flag as a must-fix: (1) the
+        pipeline order being altered - TruffleHog must run FIRST (a verified
+        secret should fail before anything else executes), and the image must
+        be built with load:true / push:false and cleared by Trivy BEFORE any
+        registry push; (2) Trivy severity relaxed below HIGH,CRITICAL, its
+        exit-code changed from '1', or an ignore file introduced - the project
+        policy is to bump the vulnerable dependency instead;
+        (3) continue-on-error added to any security step; (4) an action
+        reference that is not pinned to an exact version tag or SHA - floating
+        @main on a third-party action is a supply-chain risk and the trivy
+        breakage came from exactly this class of problem; (5) the job renamed
+        from `build`, which would silently invalidate the required status
+        check `ci / build` on all seven repos' branch protection; (6) the
+        working-directory input assumption changing - every Java service keeps
+        its Maven project in a nested directory named after the service;
+        (7) secrets echoed into logs or the step summary.
+
+    - path: ".github/workflows/frontend-ci.yml"
+      instructions: >
+        Same blast radius and same rules as service-ci.yml regarding
+        TruffleHog ordering, Trivy gating, and pinned actions. The job here is
+        also named `build`, and `apply-branch-protection.sh` requires the
+        `ci / build` check on STAM-frontend - flag any rename of this job,
+        which silently drops the required check and blocks every frontend PR.
+        KNOWN GAP - this workflow runs lint and build but never runs
+        `npm test`, so the frontend's Vitest unit tests gate nothing. If a PR
+        touches this file, check whether it closes that gap and say so if it
+        does not.
+
+    - path: "scripts/apply-branch-protection.sh"
+      instructions: >
+        Applies branch protection across all nine repos. Flag any change that
+        weakens a rule - PR required, linear history, no force push, required
+        status check `ci / build` on the seven service and frontend repos.
+        Flag missing `set -e`. Note the implementation constraint: this uses
+        `gh api` with raw JSON via `--input -` because `gh api --field` cannot
+        nest objects - do not suggest switching back to --field.
+
+    - path: "pull_request_template.md"
+      instructions: >
+        Inherited by every repo in the org. Flag the removal of the Jira issue
+        link or of any checklist item covering tests, migrations, or security
+        review. Keep it short enough that people actually fill it in.
+
+    - path: "profile/README.md"
+      instructions: >
+        The org landing page - the first thing a reviewer or employer sees.
+        Every claim must be backed by a committed test, a k6 report, or a
+        chaos drill. Flag: (1) any capability listed as shipped that is only
+        planned (the Tech Stack section is deliberately split into Shipped and
+        Planned - keep it that way); (2) any correctness claim that overstates
+        the mechanism, specifically "exactly-once" attributed to the
+        transactional outbox alone - the outbox gives at-least-once, and
+        idempotent consumers are what close the gap; (3) the oversell
+        predicate written as anything other than
+        WHERE status IN ('HELD','CONFIRMED'), which is the committed DDL;
+        (4) an architecture diagram edge that does not exist in code - the
+        browser-to-gateway hop is currently drawn as not-yet-wired on purpose,
+        because it genuinely does not work; (5) roadmap sprint numbering that
+        does not match STAM-platform/docs/devlog/sprint-*-retro.md.
+
+  tools:
+    actionlint:
+      enabled: true
+    gitleaks:
+      enabled: true
+    yamllint:
+      enabled: true
+    markdownlint:
+      enabled: true
+    shellcheck:
+      enabled: true
+    semgrep:
+      enabled: true
+
+chat:
+  auto_reply: true
+
+knowledge_base:
+  learnings:
+    scope: auto
+  issues:
+    scope: auto
