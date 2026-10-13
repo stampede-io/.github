@@ -76,7 +76,12 @@ jobs:
       - name: Package and push Helm chart to GHCR (STAM-51 AC1)
         if: github.ref == 'refs/heads/main'
         run: |
-          helm package ${{ inputs.service-name }}/helm --destination /tmp/chart-out
+          # The chart lives at repo root (STAM-<svc>/helm/), a sibling of
+          # the Maven module -- not nested under it. Found live: this
+          # path has pointed at <service-name>/helm since the step was
+          # written, which has never existed in any of the 6 repos, so
+          # this step has never actually produced a package before now.
+          helm package helm --destination /tmp/chart-out
           echo ${{ secrets.GITHUB_TOKEN }} | helm registry login ghcr.io -u ${{ github.actor }} --password-stdin
           helm push /tmp/chart-out/${{ inputs.service-name }}-*.tgz oci://ghcr.io/stampede-io/charts
 
