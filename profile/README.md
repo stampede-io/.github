@@ -125,7 +125,7 @@ The gateway → service edges are HTTP routing. Between the business services th
 
 ### Planned — Sprint 3 and beyond
 
-**Platform** — Kubernetes (kind locally, k3s on Azure) · Terraform · Helm · Sealed Secrets
+**Platform** — Kubernetes (kind locally, k3s on AWS EC2) · Terraform · Helm · Sealed Secrets
 
 **Delivery** — ArgoCD · Argo Rollouts (canary 10→50→100%)
 
