@@ -28,57 +28,8 @@ A production-grade distributed system built to handle thousands of concurrent ti
 When 10,000 fans rush to buy tickets the moment they drop, traditional architectures crumble. Double-bookings, lost payments, and silent failures erode trust. STAMPEDE solves this at the database level — not with hope, but with a **partial unique index** that makes overselling physically impossible.
 
 ## Architecture
+<img width="1824" height="3539" alt="stampede adr" src="https://github.com/user-attachments/assets/abd822ee-a9f2-448b-b2e7-2c72f0c42cd5" />
 
-```
-                          Browser — React 19 SPA
-                          PKCE auth, tokens in memory
-                                     │
-                                     ▼
-                  ┌───────────────────────────────────┐
-                  │           API Gateway             │
-                  │      Spring Cloud Gateway         │
-                  │  JWT via JWKS · Redis rate limit  │
-                  │  correlationId · CORS             │
-                  └──┬────────┬─────────┬─────────┬───┘
-                     │        │         │         │
-        ┌────────────┘        │         │         └────────────┐
-        ▼                     ▼         ▼                      ▼
-┌───────────────┐   ┌───────────────┐  ┌───────────────┐  ┌───────────────┐
-│   Identity    │   │    Catalog    │  │    Booking    │  │    Payment    │
-│               │   │               │  │   ★ core ★    │  │               │
-│ OAuth 2.1     │   │ CQRS read     │◀─┤ oversell guard│  │ Stripe test   │
-│ PKCE · RBAC   │   │ availability  │  │ event store   │  │ idempotency   │
-│ refresh       │   │ projection    │  │ saga orch.    │  │ keys          │
-│ rotation      │   │ Redis cache   │  │ outbox        │  │               │
-└───────┬───────┘   └───┬───────┬───┘  └───┬───────┬───┘  └───┬───────┬───┘
-        │               │       │          │       │          │       │
-        │               │       └──── Feign + circuit breaker │       │
-        │               │          (the only sync hop)        │       │
-        │               │                                     │       │
-        ▼               ▼                  ▼                  ▼       │
-┌──────────────────────────────────────────────────────────────────┐  │
-│   PostgreSQL 16 × 5 — one database per service, no shared schema │  │
-└──────────────────────────────────────────────────────────────────┘  │
-                                                                      │
-┌──────────────────────────────────────────────────────────────────┐  │
-│   Redis 7 — booking TTL holds · catalog cache · gateway buckets  │  │
-└──────────────────────────────────────────────────────────────────┘  │
-                                                                      │
-   identity.audit    reservations.events    payments.commands ────────┘
-        │                     │                      │   payments.events
-        ▼                     ▼                      ▼
-┌──────────────────────────────────────────────────────────────────┐
-│              Apache Kafka (KRaft) — replayable event log         │
-│           transactional outbox · CQRS projections · saga         │
-└─────────────────────────────┬────────────────────────────────────┘
-                              │ reservations.events
-                              ▼
-                     ┌────────────────┐
-                     │  Notification  │
-                     │ idempotent     │
-                     │ consumer → SMTP│
-                     └────────────────┘
-```
 
 The gateway → service edges are HTTP routing. Between the business services themselves, every edge is Kafka — with one exception: **booking → catalog** is a synchronous OpenFeign call for seat validation, wrapped in a Resilience4j circuit breaker so a catalog outage degrades booking instead of taking it down.
 
